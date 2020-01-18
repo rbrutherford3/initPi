@@ -1,0 +1,263 @@
+#!/bin/sh
+#https://www.raspberrypi.org/documentation/configuration/security.md
+
+#Function taken from: https://unix.stackexchange.com/a/223000
+read_password() {
+  REPLY="$(
+    # always read from the tty even when redirected:
+    exec < /dev/tty || exit # || exit only needed for bash
+
+    # save current tty settings:
+    tty_settings=$(stty -g) || exit
+
+    # schedule restore of the settings on exit of that subshell
+    # or on receiving SIGINT or SIGTERM:
+    trap 'stty "$tty_settings"' EXIT INT TERM
+
+    # disable terminal local echo
+    stty -echo || exit
+
+    # prompt on tty
+    printf $1 > /dev/tty
+
+    # read password as one line, record exit status
+    IFS= read -r password; ret=$?
+
+    # display a newline to visually acknowledge the entered password
+    echo > /dev/tty
+
+    # return the password for $REPLY
+    printf '%s\n' "$password"
+    exit "$ret"
+  )"
+}
+
+#IMPORT CONFIGURATION FILE
+PATH_INITPI_CONF=/etc/initpi.conf
+if [ -d "$PATH_INITPI_CONF" ]
+then
+	source $PATH_INITPI_CONF
+	echo "Warning: configuration file will be deleted after run"
+else
+	NEW_TIMEZONE=?
+	NEW_SSID=?
+	NEW_WPA=?
+	NEW_USER=?
+	NEW_PASSWORD=?
+	NEW_PUBKEY=?
+	NEW_SSH_PORT=?
+	echo "No configuration file found, must manually enter all information"
+fi
+
+#USER INTERFACE
+echo "Enter setup info, leave blank to skip option"
+
+if [ "$NEW_TIMEZONE" = "?" ]
+then
+	read -p "Timezone (ex: America/New_York): " NEW_TIMEZONE
+fi
+if [ -z "$NEW_TIMEZONE" ]
+then
+	echo "No timezone will be set up"
+fi
+
+if [ "$NEW_SSID" = "?" ]
+then
+	read -p "WiFi network SSID: " NEW_SSID
+fi
+if [ -z "$NEW_SSID" ]
+then
+	echo "No WiFi will be set up"
+else
+	if [ "$NEW_WPA" = "?" ]
+	then
+		msg="Wifi network WPA key"
+		while true
+		do
+			echo $msg
+			NEW_WPA=read_password("Enter key: ")
+			NEW_WPA2=read_password("Confirm key:")
+			msg="Mismatch, try again"
+			[ $NEW_WPA = $NEW_WPA2 ] || break
+		done
+		if [ -z "$NEW_WPA" ]
+		then
+			echo "No WPA key will be set up, assume open network"
+		fi
+	fi
+fi
+
+if [ "$NEW_USER" = "?" ]
+then
+	read -p "Enter username to replace pi: " NEW_USER
+fi
+if [ -n "$NEW_USER" ]
+then
+	USER=$NEW_USER
+else
+	USER=pi
+	echo "No new user will be set up, user pi will remain"
+fi
+
+if [ "$NEW_PASSWORD" = "?" ]
+then
+	msg="Change password for user $USER"
+	while true
+	do
+		echo $msg
+		NEW_PASSWORD=read_password("Enter new password: ")
+		NEW_PASSWORD2=read_password("Confirm password: ")
+		msg="Mismatch, try again"
+		[ $NEW_PASSWORD = $NEW_PASSWORD2 ] || break
+	done
+fi
+if [ -z "$NEW_PASSWORD" ]
+then
+	if [ -n "$NEW_USER" ]
+	then
+		echo "New user will have password disabled, be sure to use SSH keys"
+	else
+		echo "pi still has default password, be sure to use SSH keys"
+	fi
+fi
+
+if [ "$NEW_PUBKEY" = "?" ]
+then
+	read -p "Enter SSH public key (or abs path or URL): " NEW_PUBKEY
+fi
+if [ -n "$NEW_PUBKEY" ]
+then
+	if [ -d "$NEW_PUBKEY" ]
+	then
+		NEW_PUBKEY2=$(cat "$NEW_PUBKEY")
+	elif [ curl --head --silent --fail $NEW_PUBKEY 2> /dev/null ]
+	then
+		NEW_PUBKEY2=$(curl $NEW_PUBKEY)
+	else
+		NEW_PUBKEY2=$NEW_PUBKEY
+	fi
+	NEW_PUBKEY=$NEW_PUBKEY2
+else
+	echo "No public key will be setup"
+fi
+
+if [ "$NEW_SSH_PORT" = "?" ]
+then
+	read -p "Enter new SSH port number: " NEW_SSH_PORT
+fi
+if [ -z "$NEW_SSH_PORT" ]
+then
+	echo "No SSH port provided, default 22 used"
+fi
+
+#VALIDATE INPUTS:
+if [ -z "$NEW_PASSWORD" ]
+then
+	if [ -z "$NEW_PUBKEY" ]
+	then
+		echo "Must either supply a password or public key, please try again"
+		exit 1
+	fi
+fi
+
+#SET PATHS
+PATH_WPA_CONF=/etc/wpa_supplicant/wpa_supplicant.conf
+PATH_SUDO_PASSWORD_CONF=/etc/sudoers.d/010_pi-nopasswd
+PATH_USER_HOME=/home/$USER
+PATH_USER_SSH=$PATH_USER_HOME/.ssh
+PATH_USER_PUBKEYS=$PATH_USER_SSH/authorizedkeys
+PATH_SSH_CONF=/etc/ssh/sshd_config
+PATH_FAIL2BAN=/etc/fail2ban
+PATH_FAIL2BAN_CONF=$PATH_FAIL2BAN/jail.conf
+PATH_FAIL2BAN_LOCAL=$PATH_FAIL2BAN/jail.local
+
+#WIFI
+#https://www.raspberrypi.org/documentation/configuration/wireless/wireless-cli.md
+if [ -n "$NEW_SSID" ]
+then
+	if [ -n "$NEW_WPA" ]
+	then
+		wpa_passphrase $NEW_SSID $NEW_WPA >> $PATH_WPA_CONF #UNTESTED
+		sed -i '/#psk/d' $PATH_WPA_CONF #UNTESTED
+	else
+		printf "network={\n\tssid=\"$NEW_SSID\"\n\tkey_mgmt=NONE\n}" >> $PATH_WPA_CONF #UNTESTED
+	fi
+	wpa_cli -i wlan0 reconfigure #UNTESTED
+fi
+#Country codes, etc?:
+#https://www.raspberrypi.org/documentation/configuration/wireless/wireless-cli.md
+
+#UPDATE SYSTEM
+#https://www.raspberrypi.org/documentation/raspbian/updating.md
+apt-get update -y
+apt-get full-upgrade -y
+apt-get autoremove --purge -y #not really necessary
+apt-get clean -y
+#reboot (not necessary unless kernel is updated)
+
+#SET TIME ZONE
+#https://www.google.com/amp/s/linoxide.com/linux-command/set-time-date-timezone-ubuntu-linux/amp/
+if [ -n "$NEW_TIMEZONE" ]
+then
+	timedatectl set-timezone $NEW_TIMEZONE
+fi
+
+#SET UP NEW USER
+if [ -n "$NEW_USER" ]
+then
+	adduser --gecos "" --disabled-password $NEW_USER #UNTESTED
+	sudo usermod -a -G adm,dialout,cdrom,sudo,audio,video,plugdev,games,users,input,netdev,gpio,i2c,spi $NEW_USER
+	pkill -u pi
+	deluser -remove-home pi
+	sed -i 's/pi/$NEW_USER' $PATH_SUDO_PASSWORD_CONF #UNTESTED
+fi
+
+if [ -n "$NEW_PASSWORD" ]
+	echo $USER:$NEW_PASSWORD | chpasswd #UNTESTED
+fi
+
+#ADD PUBLIC KEY FOR SSH
+#https://developers.redhat.com/blog/2018/11/02/how-to-manually-copy-ssh-keys-rhel/
+if [ -n "$NEW_PUBKEY" ]
+then
+	mkdir $PATH_USER_SSH
+	chown $USER:$USER $PATH_USER_SSH
+	chmod 700 $PATH_USER_SSH
+	echo $NEW_PUBKEY > $PATH_USER_PUBKEYS #UNTESTED
+	chown $USER:$USER $PATH_USER_PUBKEYS
+	chmod 600 $PATH_USER_PUBKEYS
+fi
+
+#CONFIGURE SSH
+#https://github.com/openssh/openssh-portable/blob/master/sshd_config
+#UNTESTED (ALL):
+if [ -n "$NEW_SSH_PORT" ]
+then
+	sed -i '/#Port/c\Port $NEW_SSH_PORT' $PATH_SSH_CONF
+fi
+if [ -n "$NEW_PUBKEY" ]
+then
+	sed -i '/PasswordAuthentication/c\PasswordAuthentication no' $PATH_SSH_CONF
+	sed -i '/ChallengeResponseAuthentication/c\ChallengeResponseAuthentication no' $PATH_SSH_CONF
+	sed -i '/UsePAM/c\UsePAM no' $PATH_SSH_CONF
+fi
+sed -i '/PermitRootLogin/c\PermitRootLogin no' $PATH_SSH_CONF  #Do this regardless
+systemctl enable ssh
+systemctl start ssh
+systemctl restart ssh #Do in case SSH was already running
+
+#ADD FIREWALL
+apt-get install ufw -y
+if [ -n "$NEW_SSH_PORT" ]
+then
+	ufw limit $NEW_SSH_PORT/tcp
+else
+	ufw limit SSH #Might have to switch to 22/tcp
+fi
+ufw enable
+
+#ADD FAIL2BAN
+apt-get install fail2ban -y
+cp $PATH_FAIL2BAN_CONF $PATH_FAIL2BAN_LOCAL
+
+rm PATH_INITPI_CONF
