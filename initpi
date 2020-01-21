@@ -1,102 +1,120 @@
-#!/bin/sh
+#!/bin/bash
 #https://www.raspberrypi.org/documentation/configuration/security.md
 
-#Function taken from: https://unix.stackexchange.com/a/223000
-read_password() {
-  REPLY="$(
-    # always read from the tty even when redirected:
-    exec < /dev/tty || exit # || exit only needed for bash
-
-    # save current tty settings:
-    tty_settings=$(stty -g) || exit
-
-    # schedule restore of the settings on exit of that subshell
-    # or on receiving SIGINT or SIGTERM:
-    trap 'stty "$tty_settings"' EXIT INT TERM
-
-    # disable terminal local echo
-    stty -echo || exit
-
-    # prompt on tty
-    printf $1 > /dev/tty
-
-    # read password as one line, record exit status
-    IFS= read -r password; ret=$?
-
-    # display a newline to visually acknowledge the entered password
-    echo > /dev/tty
-
-    # return the password for $REPLY
-    printf '%s\n' "$password"
-    exit "$ret"
-  )"
-}
-
-#IMPORT CONFIGURATION FILE
-PATH_INITPI_CONF=/etc/initpi.conf
-if [ -d "$PATH_INITPI_CONF" ]
-then
-	source $PATH_INITPI_CONF
-	echo "Warning: configuration file will be deleted after run"
-else
+#SET ALL OPTIONS TO "?" (MANUAL ENTRY)
+askall () {
 	NEW_TIMEZONE=?
 	NEW_SSID=?
 	NEW_WPA=?
 	NEW_USER=?
-	NEW_PASSWORD=?
+        NEW_PASSWORD=?
 	NEW_PUBKEY=?
 	NEW_SSH_PORT=?
+}
+
+#IMPORT CONFIGURATION FILE
+PATH_INITPI_CONF=/etc/initpi.conf
+if [ -f "$PATH_INITPI_CONF" ]
+then
+	source $PATH_INITPI_CONF
+	echo "Warning: configuration file will be deleted after run"
+	if [[ -z $NEW_TIMEZONE && -z $NEW_SSID && -z $NEW_WPA && -z $NEW_USER && -z $NEW_PASSWORD && -z $NEW_PUBKEY && -z $NEW_SSH_PORT ]]
+	then
+		echo "initpi.conf not changed, please answer questions"
+		askall
+	fi
+else
 	echo "No configuration file found, must manually enter all information"
+	askall
 fi
+OLD_USER=pi
 
 #USER INTERFACE
-echo "Enter setup info, leave blank to skip option"
+echo "Enter setup options, leave blank to skip that setup"
 
+PATH_TO_TZ=/usr/share/zoneinfo/posix
 if [ "$NEW_TIMEZONE" = "?" ]
 then
-	read -p "Timezone (ex: America/New_York): " NEW_TIMEZONE
+	msg=""
+	while
+		printf "$msg"
+		read -p "Timezone (ex: America/New_York): " NEW_TIMEZONE
+		msg="Invalid timezone, try again (see https://en.wikipedia.org/wiki/List_of_tz_database_time_zones for more info)\n"
+		!([[ -L "${PATH_TO_TZ}/${NEW_TIMEZONE}" ]] || [ -z "$NEW_TIMEZONE" ])
+	do :; done
 fi
 if [ -z "$NEW_TIMEZONE" ]
 then
 	echo "No timezone will be set up"
+else
+	echo "Timezone will be set up as $NEW_TIMEZONE"
 fi
 
 if [ "$NEW_SSID" = "?" ]
 then
+	echo "Available WiFi networks (wait up to 10 seconds for scan):"
+	ifconfig wlan0 up
+	count=0
+	maxcount=10
+	until iwlist wlan0 scan > networkscan 2>/dev/null
+	do
+	        sleep 1
+		((count++)) && ((count==maxcount)) && break
+	done
+	if [ $count -eq $maxcount ]
+	then
+		echo "Network scan timed out"
+	else
+		sed -n -e 's/^.*ESSID://p' networkscan | sed 's/"//g' > networkscanlist
+		rm networkscan
+		numnetworks=$(wc -l < networkscanlist)
+		grep -n '^' networkscanlist
+		echo "You may select a network by entering its number, or enter another name"
+		#sed -e 's/.*SSID:"\(.*\)"$/\1/' networkscan
+	fi
 	read -p "WiFi network SSID: " NEW_SSID
+	re='^[0-9]+$'
+	if [[ $NEW_SSID =~ $re ]] && [ $NEW_SSID -le $numnetworks ] && [ $NEW_SSID -gt 0 ]
+	then
+		NEW_SSID=$(sed -n ${NEW_SSID}p networkscanlist)
+	fi
+	rm networkscanlist
 fi
 if [ -z "$NEW_SSID" ]
 then
 	echo "No WiFi will be set up"
 else
+	echo "WiFi network '$NEW_SSID' will be set up"
 	if [ "$NEW_WPA" = "?" ]
 	then
-		msg="Wifi network WPA key"
+		msg="Wifi network password"
 		while true
 		do
 			echo $msg
-			NEW_WPA=read_password("Enter key: ")
-			NEW_WPA2=read_password("Confirm key:")
+			read -s -p "Enter key: " NEW_WPA
+			echo ""
+			read -s -p "Confirm: " NEW_WPA2
+			echo ""
 			msg="Mismatch, try again"
-			[ $NEW_WPA = $NEW_WPA2 ] || break
+			[ "$NEW_WPA" != "$NEW_WPA2" ] || break
 		done
 		if [ -z "$NEW_WPA" ]
 		then
-			echo "No WPA key will be set up, assume open network"
+			echo "No WiFi password will be set up, assuming open network"
 		fi
 	fi
 fi
 
 if [ "$NEW_USER" = "?" ]
 then
-	read -p "Enter username to replace pi: " NEW_USER
+	read -p "Enter username to replace $OLD_USER: " NEW_USER
 fi
 if [ -n "$NEW_USER" ]
 then
 	USER=$NEW_USER
 else
-	USER=pi
-	echo "No new user will be set up, user pi will remain"
+	USER=$OLD_USER
+	echo "No new user will be set up, user $OLD_USER will remain"
 fi
 
 if [ "$NEW_PASSWORD" = "?" ]
@@ -105,10 +123,12 @@ then
 	while true
 	do
 		echo $msg
-		NEW_PASSWORD=read_password("Enter new password: ")
-		NEW_PASSWORD2=read_password("Confirm password: ")
+		read -s -p "New password: " NEW_PASSWORD
+		echo ""
+		read -s -p "Confirm: " NEW_PASSWORD2
+		echo ""
 		msg="Mismatch, try again"
-		[ $NEW_PASSWORD = $NEW_PASSWORD2 ] || break
+		[ "$NEW_PASSWORD" != "$NEW_PASSWORD2" ] || break
 	done
 fi
 if [ -z "$NEW_PASSWORD" ]
@@ -117,7 +137,7 @@ then
 	then
 		echo "New user will have password disabled, be sure to use SSH keys"
 	else
-		echo "pi still has default password, be sure to use SSH keys"
+		echo "$OLD_USER still has default password, be sure to use SSH keys"
 	fi
 fi
 
@@ -127,12 +147,16 @@ then
 fi
 if [ -n "$NEW_PUBKEY" ]
 then
-	if [ -d "$NEW_PUBKEY" ]
+	if [ -f "$NEW_PUBKEY" ]
 	then
 		NEW_PUBKEY2=$(cat "$NEW_PUBKEY")
-	elif [ curl --head --silent --fail $NEW_PUBKEY 2> /dev/null ]
+	elif curl --head --fail --silent --output /dev/null "$NEW_PUBKEY" 2> /dev/null
 	then
-		NEW_PUBKEY2=$(curl $NEW_PUBKEY)
+		NEW_PUBKEY2=$(curl --silent "$NEW_PUBKEY")
+		if [[ "$NEW_PUBKEY2" =~ "searchassist.verizon.com" ]]
+		then
+			NEW_PUBKEY2=$NEW_PUBKEY
+		fi
 	else
 		NEW_PUBKEY2=$NEW_PUBKEY
 	fi
@@ -165,11 +189,12 @@ PATH_WPA_CONF=/etc/wpa_supplicant/wpa_supplicant.conf
 PATH_SUDO_PASSWORD_CONF=/etc/sudoers.d/010_pi-nopasswd
 PATH_USER_HOME=/home/$USER
 PATH_USER_SSH=$PATH_USER_HOME/.ssh
-PATH_USER_PUBKEYS=$PATH_USER_SSH/authorizedkeys
+PATH_USER_PUBKEYS=$PATH_USER_SSH/authorized_keys
 PATH_SSH_CONF=/etc/ssh/sshd_config
 PATH_FAIL2BAN=/etc/fail2ban
 PATH_FAIL2BAN_CONF=$PATH_FAIL2BAN/jail.conf
 PATH_FAIL2BAN_LOCAL=$PATH_FAIL2BAN/jail.local
+PATH_RCLOCAL=/etc/rc.local
 
 #WIFI
 #https://www.raspberrypi.org/documentation/configuration/wireless/wireless-cli.md
@@ -177,15 +202,17 @@ if [ -n "$NEW_SSID" ]
 then
 	if [ -n "$NEW_WPA" ]
 	then
-		wpa_passphrase $NEW_SSID $NEW_WPA >> $PATH_WPA_CONF #UNTESTED
-		sed -i '/#psk/d' $PATH_WPA_CONF #UNTESTED
+		wpa_passphrase $NEW_SSID $NEW_WPA >> $PATH_WPA_CONF
+		sed -i '/#psk/d' $PATH_WPA_CONF
 	else
-		printf "network={\n\tssid=\"$NEW_SSID\"\n\tkey_mgmt=NONE\n}" >> $PATH_WPA_CONF #UNTESTED
+		printf "network={\n\tssid=\"$NEW_SSID\"\n\tkey_mgmt=NONE\n}\n" >> $PATH_WPA_CONF
 	fi
-	wpa_cli -i wlan0 reconfigure #UNTESTED
+	wpa_cli -i wlan0 reconfigure
 fi
-#Country codes, etc?:
+#Add country code
 #https://www.raspberrypi.org/documentation/configuration/wireless/wireless-cli.md
+sed -i '/^country=/d' $PATH_WPA_CONF
+sed -i '/^update_config/a country=US' $PATH_WPA_CONF
 
 #UPDATE SYSTEM
 #https://www.raspberrypi.org/documentation/raspbian/updating.md
@@ -193,7 +220,6 @@ apt-get update -y
 apt-get full-upgrade -y
 apt-get autoremove --purge -y #not really necessary
 apt-get clean -y
-#reboot (not necessary unless kernel is updated)
 
 #SET TIME ZONE
 #https://www.google.com/amp/s/linoxide.com/linux-command/set-time-date-timezone-ubuntu-linux/amp/
@@ -202,18 +228,22 @@ then
 	timedatectl set-timezone $NEW_TIMEZONE
 fi
 
-#SET UP NEW USER
+#SET UP NEW USER, MARK OLD USER FOR DELETION ON REBOOT
 if [ -n "$NEW_USER" ]
 then
-	adduser --gecos "" --disabled-password $NEW_USER #UNTESTED
+	adduser --gecos "" --disabled-password $NEW_USER
 	sudo usermod -a -G adm,dialout,cdrom,sudo,audio,video,plugdev,games,users,input,netdev,gpio,i2c,spi $NEW_USER
-	pkill -u pi
-	deluser -remove-home pi
-	sed -i 's/pi/$NEW_USER' $PATH_SUDO_PASSWORD_CONF #UNTESTED
+	sed -i "/^exit 0/d" $PATH_RCLOCAL
+	echo "### BEGIN INITPI ###" >> $PATH_RCLOCAL
+	echo "deluser -remove-home $OLD_USER" >> $PATH_RCLOCAL
+	echo "exit 0" >> $PATH_RCLOCAL
+	sed -i "s/^$OLD_USER/$NEW_USER/" $PATH_SUDO_PASSWORD_CONF
+	#sed -i "s/^OLD_USER=$OLD_USER/OLD_USER=$NEW_USER/" /home/spiff/scripts/shell/initpi/initpi #DEBUGGIN, NEED TO DELETE
 fi
 
 if [ -n "$NEW_PASSWORD" ]
-	echo $USER:$NEW_PASSWORD | chpasswd #UNTESTED
+then
+	echo $USER:$NEW_PASSWORD | chpasswd
 fi
 
 #ADD PUBLIC KEY FOR SSH
@@ -223,25 +253,24 @@ then
 	mkdir $PATH_USER_SSH
 	chown $USER:$USER $PATH_USER_SSH
 	chmod 700 $PATH_USER_SSH
-	echo $NEW_PUBKEY > $PATH_USER_PUBKEYS #UNTESTED
+	echo $NEW_PUBKEY > $PATH_USER_PUBKEYS
 	chown $USER:$USER $PATH_USER_PUBKEYS
 	chmod 600 $PATH_USER_PUBKEYS
 fi
 
 #CONFIGURE SSH
 #https://github.com/openssh/openssh-portable/blob/master/sshd_config
-#UNTESTED (ALL):
 if [ -n "$NEW_SSH_PORT" ]
 then
-	sed -i '/#Port/c\Port $NEW_SSH_PORT' $PATH_SSH_CONF
+	sed -i "/^#*Port/c\Port $NEW_SSH_PORT" $PATH_SSH_CONF
 fi
 if [ -n "$NEW_PUBKEY" ]
 then
-	sed -i '/PasswordAuthentication/c\PasswordAuthentication no' $PATH_SSH_CONF
-	sed -i '/ChallengeResponseAuthentication/c\ChallengeResponseAuthentication no' $PATH_SSH_CONF
-	sed -i '/UsePAM/c\UsePAM no' $PATH_SSH_CONF
+	sed -i '/^#*PasswordAuthentication/c\PasswordAuthentication no' $PATH_SSH_CONF
+	sed -i '/^#*ChallengeResponseAuthentication/c\ChallengeResponseAuthentication no' $PATH_SSH_CONF
+	sed -i '/^#*UsePAM/c\UsePAM no' $PATH_SSH_CONF
 fi
-sed -i '/PermitRootLogin/c\PermitRootLogin no' $PATH_SSH_CONF  #Do this regardless
+sed -i '/^#*PermitRootLogin/c\PermitRootLogin no' $PATH_SSH_CONF  #Do this regardless
 systemctl enable ssh
 systemctl start ssh
 systemctl restart ssh #Do in case SSH was already running
@@ -260,4 +289,6 @@ ufw enable
 apt-get install fail2ban -y
 cp $PATH_FAIL2BAN_CONF $PATH_FAIL2BAN_LOCAL
 
-rm PATH_INITPI_CONF
+rm $PATH_INITPI_CONF
+
+reboot
