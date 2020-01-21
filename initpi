@@ -195,11 +195,13 @@ PATH_FAIL2BAN=/etc/fail2ban
 PATH_FAIL2BAN_CONF=$PATH_FAIL2BAN/jail.conf
 PATH_FAIL2BAN_LOCAL=$PATH_FAIL2BAN/jail.local
 PATH_RCLOCAL=/etc/rc.local
+PATH_RCLOCAL_BACKUP=/etc/rc.local.backup
 
 #WIFI
 #https://www.raspberrypi.org/documentation/configuration/wireless/wireless-cli.md
 if [ -n "$NEW_SSID" ]
 then
+	apt-get install wpasupplicant -y
 	if [ -n "$NEW_WPA" ]
 	then
 		wpa_passphrase $NEW_SSID $NEW_WPA >> $PATH_WPA_CONF
@@ -233,9 +235,12 @@ if [ -n "$NEW_USER" ]
 then
 	adduser --gecos "" --disabled-password $NEW_USER
 	sudo usermod -a -G adm,dialout,cdrom,sudo,audio,video,plugdev,games,users,input,netdev,gpio,i2c,spi $NEW_USER
+	cp $PATH_RCLOCAL $PATH_RCLOCAL_BACKUP
 	sed -i "/^exit 0/d" $PATH_RCLOCAL
 	echo "### BEGIN INITPI ###" >> $PATH_RCLOCAL
 	echo "deluser -remove-home $OLD_USER" >> $PATH_RCLOCAL
+	echo "mv $PATH_RCLOCAL_BACKUP $PATH_RCLOCAL" >> $PATH_RCLOCAL
+	echo "### END INITPI ###" >> $PATH_RCLOCAL
 	echo "exit 0" >> $PATH_RCLOCAL
 	sed -i "s/^$OLD_USER/$NEW_USER/" $PATH_SUDO_PASSWORD_CONF
 	#sed -i "s/^OLD_USER=$OLD_USER/OLD_USER=$NEW_USER/" /home/spiff/scripts/shell/initpi/initpi #DEBUGGIN, NEED TO DELETE
@@ -246,6 +251,7 @@ then
 	echo $USER:$NEW_PASSWORD | chpasswd
 fi
 
+apt-get install openssh-server -y
 #ADD PUBLIC KEY FOR SSH
 #https://developers.redhat.com/blog/2018/11/02/how-to-manually-copy-ssh-keys-rhel/
 if [ -n "$NEW_PUBKEY" ]
@@ -289,6 +295,9 @@ ufw enable
 apt-get install fail2ban -y
 cp $PATH_FAIL2BAN_CONF $PATH_FAIL2BAN_LOCAL
 
-rm $PATH_INITPI_CONF
+if [ -f "$PATH_INITPI_CONF" ]
+then
+	rm $PATH_INITPI_CONF
+fi
 
 reboot

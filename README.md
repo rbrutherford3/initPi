@@ -1,6 +1,6 @@
-#initpi (UNTESTED)
-## Overview
-This is a shell script called `initpi` that is designed to automate the secure setup of the Raspberry Pi through a user interface (UI) or and/or an optional configuration file `initpi.conf`, which should reside in the `/etc` folder.  The user modifies the contents of `/etc/initpi.conf` for `initpi`, forcing a UI on select fields if desired.  If no `initpi.conf` is found, UI is implemented for all settings.  `initpi` deletes `initpi.conf` automatically after each use.  Saving a configuration file for future use by copying it prior to the run (see **Security** section) allows the user to repeat the same setup over and over or across different systems, but comes with obvious risk.  Encrypting copies of `init.conf` is highly recommended.
+# initpi
+## Overview/Instructions
+This is a shell script called `initpi` that is designed to automate the secure setup of the Raspberry Pi through a user interface (UI) or and/or an optional configuration file `initpi.conf`, which should reside in the `/etc` folder.  The user modifies the contents of `/etc/initpi.conf` for `initpi`, forcing a UI on select fields if desired.  If no `initpi.conf` is found, or if `initpi.conf` is unchanged, UI is implemented for all settings.  `initpi` deletes `initpi.conf` automatically after each use.  `rc.local` is used to delete users (if indicated) after a forced reboot at the end of run.  Saving a configuration file for future use by copying it prior to the run (see **Security** section) allows the user to repeat the same setup over and over or across different systems, but comes with obvious risk.  Encrypting copies of `init.conf` is highly recommended.
 
 ### The following can be configured:
 * timezone
@@ -14,7 +14,7 @@ This is a shell script called `initpi` that is designed to automate the secure s
 Additionally, a firewall is set up with the proper rules to allow the SSH port through, and considerations are made for SSH configuration via keys only (no password access).  A system update and full upgrade are also performed.
 
 ## Security
-Obviously saving passwords in plain text is not wise, so `initpi` deletes `initpi.conf` after execution.  I am currently working on a way to automatically encrypt the configuration file to allow it to be safely stored for future use and avoid the need to delete it, but for now copying the configuration file and securing it are at the user's discretion and must assume the risk.
+Obviously saving passwords in plain text is not wise, so `initpi` deletes `initpi.conf` after execution.  I want to automatically encrypt the configuration file to allow it to be safely stored for future use and avoid the need to delete it, but for now copying the configuration file and securing it are at the user's discretion and must assume the risk.
 
 ### Mitigating security risks (most effective first):
 * Don't save `init.conf` at all, re-enter information for each run in UI
