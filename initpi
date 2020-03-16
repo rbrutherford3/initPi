@@ -1,220 +1,305 @@
 #!/bin/bash
 #https://www.raspberrypi.org/documentation/configuration/security.md
 
-#SET ALL OPTIONS TO "?" (MANUAL ENTRY)
+#STOP SSH IF IT IS RUNNING (WON'T CAUSE EXIT OR TERMINATION OF CURRENT SESSION)
+systemctl stop ssh
+
+#EXIT IF NOT RUN AS ROOT
+if [[ $(id -u) -ne 0 ]]
+then
+	printf "Please run as root\n"
+	exit 1
+fi
+
+#INITPI PATHS
+PATH_INITPI=$(readlink -f "$0")
+PATH_INITPI_DIR=$(dirname "$PATH_INITPI")
+PATH_INITPI_BACKUPS=/etc/initpi
+PATH_INITPI_CONF=$PATH_INITPI_DIR/initpi.conf
+PATH_INITPI_FINISH=$PATH_INITPI_DIR/finish
+
+#CONFIRM FILES
+if ! [[ -f "$PATH_INITPI_FINISH" ]]
+then
+	printf "Please download all program files and place them in the same directory\n"
+	exit 1
+fi
+
+#SET ALL OPTIONS TO ? (MANUAL ENTRY)
 askall () {
 	NEW_TIMEZONE=?
 	NEW_SSID=?
 	NEW_WPA=?
+	OLD_USER=?
 	NEW_USER=?
         NEW_PASSWORD=?
 	NEW_PUBKEY=?
 	NEW_SSH_PORT=?
+	REVERT_TIMER=?
 }
 
 #IMPORT CONFIGURATION FILE
-PATH_INITPI_CONF=/etc/initpi.conf
-if [ -f "$PATH_INITPI_CONF" ]
+if [[ -f "$PATH_INITPI_CONF" ]]
 then
 	source $PATH_INITPI_CONF
-	echo "Warning: configuration file will be deleted after run"
-	if [[ -z $NEW_TIMEZONE && -z $NEW_SSID && -z $NEW_WPA && -z $NEW_USER && -z $NEW_PASSWORD && -z $NEW_PUBKEY && -z $NEW_SSH_PORT ]]
+	printf "Warning: configuration file will be deleted after run\n"
+	if [[ -z "$NEW_TIMEZONE" && -z "$NEW_SSID" && -z "$NEW_WPA" && \
+		-z "$OLD_USER" && -z "$NEW_USER" && -z "$NEW_PASSWORD" && \
+		-z "$NEW_PUBKEY" && -z "$NEW_SSH_PORT" && -z "$REVERT_TIMER" ]]
 	then
-		echo "initpi.conf not changed, please answer questions"
+		printf "initpi.conf not changed, please answer questions\n"
 		askall
 	fi
 else
-	echo "No configuration file found, must manually enter all information"
+	printf "No configuration file found, must manually enter all information\n"
 	askall
 fi
-OLD_USER=pi
+
+#GLOBALS
+DEFAULT_USER=pi
+IS_NUMBER='^[0-9]+$'
+PATH_TZ=/usr/share/zoneinfo/posix
+NETWORK_SCAN=$PATH_INITPI_DIR/networkscan
+NETWORK_SCAN_LIST=$PATH_INITPI_DIR/networkscanlist
 
 #USER INTERFACE
-echo "Enter setup options, leave blank to skip that setup"
+printf "Enter setup options, leave blank to skip that setup\n"
 
-PATH_TO_TZ=/usr/share/zoneinfo/posix
-if [ "$NEW_TIMEZONE" = "?" ]
+if [[ "$NEW_TIMEZONE" = "?" ]]
 then
-	msg=""
-	while
-		printf "$msg"
-		read -p "Timezone (ex: America/New_York): " NEW_TIMEZONE
-		msg="Invalid timezone, try again (see https://en.wikipedia.org/wiki/List_of_tz_database_time_zones for more info)\n"
-		!([[ -L "${PATH_TO_TZ}/${NEW_TIMEZONE}" ]] || [ -z "$NEW_TIMEZONE" ])
-	do :; done
+	until
+		read -p "Enter timezone (ex: America/New_York): " NEW_TIMEZONE
+		[[ -L "${PATH_TZ}/${NEW_TIMEZONE}" || -z "$NEW_TIMEZONE" ]]
+	do
+		printf "Invalid timezone, try again (see https://en.wikipedia.org/wiki/List_of_tz_database_time_zones)\n"
+	done
 fi
-if [ -z "$NEW_TIMEZONE" ]
+if [[ -n "$NEW_TIMEZONE" ]]
 then
-	echo "No timezone will be set up"
+	printf "Timezone will be set up as '$NEW_TIMEZONE'\n"
 else
-	echo "Timezone will be set up as $NEW_TIMEZONE"
+	printf "No timezone will be set up\n"
 fi
 
-if [ "$NEW_SSID" = "?" ]
+if [[ "$NEW_SSID" = "?" ]]
 then
-	echo "Available WiFi networks (wait up to 10 seconds for scan):"
+	printf "Available WiFi networks (wait up to 10 seconds for scan):\n"
 	ifconfig wlan0 up
-	count=0
-	maxcount=10
-	until iwlist wlan0 scan > networkscan 2>/dev/null
+	maxcount=$((SECONDS+10))
+	until iwlist wlan0 scan > "$NETWORK_SCAN" 2>/dev/null || ((SECONDS>maxcount))
 	do
 	        sleep 1
-		((count++)) && ((count==maxcount)) && break
 	done
-	if [ $count -eq $maxcount ]
+	if [[ -f "$NETWORK_SCAN" ]]
 	then
-		echo "Network scan timed out"
+		sed -n -e 's/^.*ESSID://p' $NETWORK_SCAN | sed 's/"//g' > $NETWORK_SCAN_LIST
+		rm $NETWORK_SCAN
+		numnetworks=$(wc -l < $NETWORK_SCAN_LIST)
+		grep -n '^' $NETWORK_SCAN_LIST
+		msg="Enter a list number or a WiFi SSID: "
 	else
-		sed -n -e 's/^.*ESSID://p' networkscan | sed 's/"//g' > networkscanlist
-		rm networkscan
-		numnetworks=$(wc -l < networkscanlist)
-		grep -n '^' networkscanlist
-		echo "You may select a network by entering its number, or enter another name"
-		#sed -e 's/.*SSID:"\(.*\)"$/\1/' networkscan
+		printf "Newtork scan timed out\n"
+		msg="Enter WiFi SSID: "
 	fi
-	read -p "WiFi network SSID: " NEW_SSID
-	re='^[0-9]+$'
-	if [[ $NEW_SSID =~ $re ]] && [ $NEW_SSID -le $numnetworks ] && [ $NEW_SSID -gt 0 ]
+	read -p "$msg" NEW_SSID
+	if [[ "$NEW_SSID" =~ $IS_NUMBER && "$NEW_SSID" -le "$numnetworks" && "$NEW_SSID" -gt 0 ]]
 	then
-		NEW_SSID=$(sed -n ${NEW_SSID}p networkscanlist)
+		NEW_SSID=$(sed -n ${NEW_SSID}p $NETWORK_SCAN_LIST)
 	fi
-	rm networkscanlist
+	rm $NETWORK_SCAN_LIST
 fi
-if [ -z "$NEW_SSID" ]
+if [[ -n "$NEW_SSID" ]]
 then
-	echo "No WiFi will be set up"
-else
-	echo "WiFi network '$NEW_SSID' will be set up"
-	if [ "$NEW_WPA" = "?" ]
+	printf "WiFi network '$NEW_SSID' will be set up\n"
+	if [[ "$NEW_WPA" = "?" ]]
 	then
-		msg="Wifi network password"
-		while true
+		while
+			read -s -p "Enter WiFi key: " NEW_WPA
+			printf "\n"
+			read -s -p "Confirm key: " NEW_WPA2
+			printf "\n"
+			[[ "$NEW_WPA" != "$NEW_WPA2" ]]
 		do
-			echo $msg
-			read -s -p "Enter key: " NEW_WPA
-			echo ""
-			read -s -p "Confirm: " NEW_WPA2
-			echo ""
-			msg="Mismatch, try again"
-			[ "$NEW_WPA" != "$NEW_WPA2" ] || break
+			printf "Mismatch, try again\n"
 		done
-		if [ -z "$NEW_WPA" ]
+		if [[ -n "$NEW_WPA" ]]
 		then
-			echo "No WiFi password will be set up, assuming open network"
+			printf "WiFi password saved\n"
+		else
+			printf "No WiFi password will be set up, assuming open network\n"
 		fi
 	fi
-fi
-
-if [ "$NEW_USER" = "?" ]
-then
-	read -p "Enter username to replace $OLD_USER: " NEW_USER
-fi
-if [ -n "$NEW_USER" ]
-then
-	USER=$NEW_USER
 else
-	USER=$OLD_USER
-	echo "No new user will be set up, user $OLD_USER will remain"
+	printf "No WiFi will be set up\n"
 fi
 
-if [ "$NEW_PASSWORD" = "?" ]
+if [[ "$OLD_USER" = "?" ]]
 then
-	msg="Change password for user $USER"
-	while true
+	until
+		read -p "Enter current username (default=$DEFAULT_USER): " OLD_USER
+		[[ -n $(getent passwd | grep "^$OLD_USER:") ]] || [[ -z "$OLDUSER" && -n $(getent passwd | grep "^$DEFAULT_USER:") ]]
 	do
-		echo $msg
-		read -s -p "New password: " NEW_PASSWORD
-		echo ""
-		read -s -p "Confirm: " NEW_PASSWORD2
-		echo ""
-		msg="Mismatch, try again"
-		[ "$NEW_PASSWORD" != "$NEW_PASSWORD2" ] || break
+		printf "Invalid user, try again\n"
 	done
 fi
-if [ -z "$NEW_PASSWORD" ]
+if [[ -n "$OLD_USER" ]]
 then
-	if [ -n "$NEW_USER" ]
-	then
-		echo "New user will have password disabled, be sure to use SSH keys"
-	else
-		echo "$OLD_USER still has default password, be sure to use SSH keys"
-	fi
-fi
-
-if [ "$NEW_PUBKEY" = "?" ]
-then
-	read -p "Enter SSH public key (or abs path or URL): " NEW_PUBKEY
-fi
-if [ -n "$NEW_PUBKEY" ]
-then
-	if [ -f "$NEW_PUBKEY" ]
-	then
-		NEW_PUBKEY2=$(cat "$NEW_PUBKEY")
-	elif curl --head --fail --silent --output /dev/null "$NEW_PUBKEY" 2> /dev/null
-	then
-		NEW_PUBKEY2=$(curl --silent "$NEW_PUBKEY")
-		if [[ "$NEW_PUBKEY2" =~ "searchassist.verizon.com" ]]
-		then
-			NEW_PUBKEY2=$NEW_PUBKEY
-		fi
-	else
-		NEW_PUBKEY2=$NEW_PUBKEY
-	fi
-	NEW_PUBKEY=$NEW_PUBKEY2
+	printf "User $OLD_USER selected\n"
 else
-	echo "No public key will be setup"
-fi
-
-if [ "$NEW_SSH_PORT" = "?" ]
-then
-	read -p "Enter new SSH port number: " NEW_SSH_PORT
-fi
-if [ -z "$NEW_SSH_PORT" ]
-then
-	echo "No SSH port provided, default 22 used"
-fi
-
-#VALIDATE INPUTS:
-if [ -z "$NEW_PASSWORD" ]
-then
-	if [ -z "$NEW_PUBKEY" ]
+	if [[ -n $(getent passwd | grep "^$DEFAULT_USER:") ]]
 	then
-		echo "Must either supply a password or public key, please try again"
+		OLD_USER=$DEFAULT_USER
+	else
+		printf "No user specified and no $DEFAULT_USER user exists!\n"
 		exit 1
 	fi
 fi
 
+if [[ "$NEW_USER" = "?" ]]
+then
+	read -p "Enter username to replace $OLD_USER: " NEW_USER
+fi
+if [[ -n "$NEW_USER" ]]
+then
+	printf "User $NEW_USER will be created\n"
+else
+	NEW_USER=$OLD_USER
+	printf "No new user will be set up, user $OLD_USER will remain\n"
+fi
+
+if [[ "$NEW_PASSWORD" = "?" ]]
+then
+	printf "Change password for user $NEW_USER\n"
+	while
+		read -s -p "New password: " NEW_PASSWORD
+		printf "\n"
+		read -s -p "Confirm: " NEW_PASSWORD2
+		printf "\n"
+		[[ "$NEW_PASSWORD" != "$NEW_PASSWORD2" ]]
+	do
+		printf "Mismatch, try again\n"
+	done
+fi
+if [[ -n "$NEW_PASSWORD" ]]
+then
+	printf "Password saved\n"
+else
+	if [[ "$OLD_USER" = "$NEW_USER" ]]
+	then
+		printf "$OLD_USER still has default password, be sure to use SSH keys\n"
+	else
+		printf "New user $NEW_USER will have a disabled password, be sure to use SSH keys\n"
+	fi
+fi
+
+if [[ "$NEW_PUBKEY" = "?" ]]
+then
+	read -p "Enter SSH public key (or abs path or URL): " NEW_PUBKEY
+fi
+if [[ -n "$NEW_PUBKEY" ]]
+then
+	printf "Public key saved\n"
+else
+	printf "No public key will be setup\n"
+fi
+
+if [[ "$NEW_SSH_PORT" = "?" ]]
+then
+	until
+		read -p "Enter new SSH port number: " NEW_SSH_PORT
+		[[ "$NEW_SSH_PORT" =~ $IS_NUMBER || -z "$IS_NUMBER" ]]
+	do
+		printf "Invalid entry, please try again\n"
+	done
+fi
+if [[ -n "$NEW_SSH_PORT" ]]
+then
+	printf "SSH port will be changed to $NEW_SSH_PORT\n"
+else
+	printf "No SSH port provided, default 22 will be used\n"
+	NEW_SSH_PORT=22
+fi
+
+if [[ "$REVERT_TIMER" = "?" ]]
+then
+	printf "System will wait for a matter of time for a login to occur\n"
+	printf "before reverting back to default user, and SSH settings.\n"
+	printf "Enter 0 to skip this, default is 60\n"
+	until
+		read -p "Enter reversion wait time: " REVERT_TIMER
+		[[ "$REVERT_TIMER" =~ $IS_NUMBER && "$REVERT_TIMER" -ge 0 ]] || [[ -z "$REVERT_TIMER" ]]
+	do
+		printf "Invalid entry, try again\n"
+	done
+fi
+if [[ -n "$REVERT_TIMER" ]]
+then
+	if [[ "$REVERT_TIMER" -eq 0 ]]
+	then
+		printf "Timer will be skipped\n"
+	else
+		printf "Timer will be $REVERT_TIMER minutes\n"
+	fi
+else
+	printf "Timer will be set to default (60 minutes)\n"
+	REVERT_TIMER=60
+fi
+
+#VALIDATE INPUTS:
+if [[ -z "$NEW_PASSWORD" && -z "$NEW_PUBKEY" ]]
+then
+	printf "Must either supply a password or public key, please try again\n"
+	exit 1
+fi
+
 #SET PATHS
 PATH_WPA_CONF=/etc/wpa_supplicant/wpa_supplicant.conf
+PATH_WPA_CONF_BACKUP=$PATH_INITPI_BACKUPS/wpa_supplicant.conf
 PATH_SUDO_PASSWORD_CONF=/etc/sudoers.d/010_pi-nopasswd
-PATH_USER_HOME=/home/$USER
-PATH_USER_SSH=$PATH_USER_HOME/.ssh
+PATH_SUDO_PASSWORD_CONF_BACKUP=$PATH_INITPI_BACKUPS/010_pi-nopasswd
+PATH_OLD_USER_HOME=/home/$OLD_USER #may be the same as PATH_USER_HOME if no new user is selected
+PATH_NEW_USER_HOME=/home/$NEW_USER
+PATH_USER_BACKUP=$PATH_INITPI_BACKUPS/user
+PATH_USER_SSH=$PATH_NEW_USER_HOME/.ssh
 PATH_USER_PUBKEYS=$PATH_USER_SSH/authorized_keys
 PATH_SSH_CONF=/etc/ssh/sshd_config
+PATH_SSH_CONF_BACKUP=$PATH_INITPI_BACKUPS/sshd_config
 PATH_FAIL2BAN=/etc/fail2ban
 PATH_FAIL2BAN_CONF=$PATH_FAIL2BAN/jail.conf
 PATH_FAIL2BAN_LOCAL=$PATH_FAIL2BAN/jail.local
 PATH_RCLOCAL=/etc/rc.local
-PATH_RCLOCAL_BACKUP=/etc/rc.local.backup
+PATH_RCLOCAL_BACKUP=$PATH_INITPI_BACKUPS/rc.local
+
+#CREATE BACKUPS
+if [[ -d $PATH_INITPI_BACKUPS ]]
+then
+	rm -r $PATH_INITPI_BACKUPS
+fi
+mkdir $PATH_INITPI_BACKUPS
+cp -a $PATH_OLD_USER_HOME $PATH_USER_BACKUP
+cp $PATH_WPA_CONF $PATH_WPA_CONF_BACKUP
+cp $PATH_SUDO_PASSWORD_CONF $PATH_SUDO_PASSWORD_CONF_BACKUP
+cp $PATH_RCLOCAL $PATH_RCLOCAL_BACKUP
+cp $PATH_SSH_CONF $PATH_SSH_CONF_BACKUP
 
 #WIFI
 #https://www.raspberrypi.org/documentation/configuration/wireless/wireless-cli.md
-if [ -n "$NEW_SSID" ]
+if [[ -n "$NEW_SSID" ]]
 then
 	apt-get install wpasupplicant -y
-	if [ -n "$NEW_WPA" ]
+	if [[ -n "$NEW_WPA" ]]
 	then
 		wpa_passphrase $NEW_SSID $NEW_WPA >> $PATH_WPA_CONF
 		sed -i '/#psk/d' $PATH_WPA_CONF
 	else
 		printf "network={\n\tssid=\"$NEW_SSID\"\n\tkey_mgmt=NONE\n}\n" >> $PATH_WPA_CONF
 	fi
-	wpa_cli -i wlan0 reconfigure
 fi
 #Add country code
 #https://www.raspberrypi.org/documentation/configuration/wireless/wireless-cli.md
 sed -i '/^country=/d' $PATH_WPA_CONF
 sed -i '/^update_config/a country=US' $PATH_WPA_CONF
+wpa_cli -i wlan0 reconfigure
 
 #UPDATE SYSTEM
 #https://www.raspberrypi.org/documentation/raspbian/updating.md
@@ -225,79 +310,89 @@ apt-get clean -y
 
 #SET TIME ZONE
 #https://www.google.com/amp/s/linoxide.com/linux-command/set-time-date-timezone-ubuntu-linux/amp/
-if [ -n "$NEW_TIMEZONE" ]
+if [[ -n "$NEW_TIMEZONE" ]]
 then
 	timedatectl set-timezone $NEW_TIMEZONE
 fi
 
-#SET UP NEW USER, MARK OLD USER FOR DELETION ON REBOOT
-if [ -n "$NEW_USER" ]
+#SET UP NEW USER
+if [[ "$OLD_USER" != "$NEW_USER" ]]
 then
 	adduser --gecos "" --disabled-password $NEW_USER
 	sudo usermod -a -G adm,dialout,cdrom,sudo,audio,video,plugdev,games,users,input,netdev,gpio,i2c,spi $NEW_USER
-	cp $PATH_RCLOCAL $PATH_RCLOCAL_BACKUP
-	sed -i "/^exit 0/d" $PATH_RCLOCAL
-	echo "### BEGIN INITPI ###" >> $PATH_RCLOCAL
-	echo "deluser -remove-home $OLD_USER" >> $PATH_RCLOCAL
-	echo "mv $PATH_RCLOCAL_BACKUP $PATH_RCLOCAL" >> $PATH_RCLOCAL
-	echo "### END INITPI ###" >> $PATH_RCLOCAL
-	echo "exit 0" >> $PATH_RCLOCAL
-	sed -i "s/^$OLD_USER/$NEW_USER/" $PATH_SUDO_PASSWORD_CONF
-	#sed -i "s/^OLD_USER=$OLD_USER/OLD_USER=$NEW_USER/" /home/spiff/scripts/shell/initpi/initpi #DEBUGGIN, NEED TO DELETE
+	cp -a $PATH_USER_BACKUP/* $PATH_NEW_USER_HOME
+
+	#sed -i "/^$OLD_USER /d" $PATH_SUDO_PASSWORD_CONF
+	echo "$NEW_USER ALL=(ALL) NOPASSWD: ALL" >> $PATH_SUDO_PASSWORD_CONF
+
+	chage -E 0 $NEW_USER #lock user for later
 fi
 
-if [ -n "$NEW_PASSWORD" ]
+if [[ -n "$NEW_PASSWORD" ]]
 then
-	echo $USER:$NEW_PASSWORD | chpasswd
+	echo $NEW_USER:$NEW_PASSWORD | chpasswd
 fi
 
 apt-get install openssh-server -y
 #ADD PUBLIC KEY FOR SSH
 #https://developers.redhat.com/blog/2018/11/02/how-to-manually-copy-ssh-keys-rhel/
-if [ -n "$NEW_PUBKEY" ]
+if [[ -n "$NEW_PUBKEY" ]]
 then
+        if [[ -f "$NEW_PUBKEY" ]]
+        then
+                NEW_PUBKEY2=$(cat "$NEW_PUBKEY")
+        elif curl --head --fail --silent --output /dev/null "$NEW_PUBKEY" 2> /dev/null
+        then
+                NEW_PUBKEY2=$(curl --silent "$NEW_PUBKEY")
+		if [[ "$NEW_PUBKEY2" =~ "searchassist.verizon.com" ]]
+       	        then
+                        NEW_PUBKEY2=$NEW_PUBKEY
+          	fi
+	else
+	        NEW_PUBKEY2=$NEW_PUBKEY
+	fi
+	NEW_PUBKEY=$NEW_PUBKEY2
 	mkdir $PATH_USER_SSH
-	chown $USER:$USER $PATH_USER_SSH
+	chown $NEW_USER:$NEW_USER $PATH_USER_SSH
 	chmod 700 $PATH_USER_SSH
 	echo $NEW_PUBKEY > $PATH_USER_PUBKEYS
-	chown $USER:$USER $PATH_USER_PUBKEYS
+	chown $NEW_USER:$NEW_USER $PATH_USER_PUBKEYS
 	chmod 600 $PATH_USER_PUBKEYS
 fi
 
 #CONFIGURE SSH
 #https://github.com/openssh/openssh-portable/blob/master/sshd_config
-if [ -n "$NEW_SSH_PORT" ]
+if [[ "$NEW_SSH_PORT" = 22 ]]
 then
+	sed -i "/^Port/c\#Port 22" $PATH_SSH_CONF
+else
 	sed -i "/^#*Port/c\Port $NEW_SSH_PORT" $PATH_SSH_CONF
 fi
-if [ -n "$NEW_PUBKEY" ]
+if [[ -n "$NEW_PUBKEY" ]]
 then
 	sed -i '/^#*PasswordAuthentication/c\PasswordAuthentication no' $PATH_SSH_CONF
 	sed -i '/^#*ChallengeResponseAuthentication/c\ChallengeResponseAuthentication no' $PATH_SSH_CONF
 	sed -i '/^#*UsePAM/c\UsePAM no' $PATH_SSH_CONF
 fi
 sed -i '/^#*PermitRootLogin/c\PermitRootLogin no' $PATH_SSH_CONF  #Do this regardless
-systemctl enable ssh
-systemctl start ssh
-systemctl restart ssh #Do in case SSH was already running
 
-#ADD FIREWALL
+#INSTALL FIREWALL
 apt-get install ufw -y
-if [ -n "$NEW_SSH_PORT" ]
-then
-	ufw limit $NEW_SSH_PORT/tcp
-else
-	ufw limit SSH #Might have to switch to 22/tcp
-fi
-ufw enable
 
-#ADD FAIL2BAN
+#INSTALL FAIL2BAN
 apt-get install fail2ban -y
-cp $PATH_FAIL2BAN_CONF $PATH_FAIL2BAN_LOCAL
 
-if [ -f "$PATH_INITPI_CONF" ]
+#DELETE CONFIGURATION FILE IF EXISTS
+if [[ -f "$PATH_INITPI_CONF" ]]
 then
 	rm $PATH_INITPI_CONF
 fi
+
+#PREPARE FOR RESTART (SET UP rc.local)
+sed -i "/^exit 0/d" $PATH_RCLOCAL
+printf "### BEGIN INITPI ###\n" >> $PATH_RCLOCAL
+printf "$PATH_INITPI_FINISH $OLD_USER $NEW_USER $NEW_SSH_PORT $REVERT_TIMER &\n" >> $PATH_RCLOCAL
+printf "### END INITPI ###\n" >> $PATH_RCLOCAL
+printf "exit 0\n" >> $PATH_RCLOCAL
 
 reboot
