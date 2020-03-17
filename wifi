@@ -1,0 +1,33 @@
+#!/bin/bash
+
+#WIFI SETUP
+#https://www.raspberrypi.org/documentation/configuration/wireless/wireless-cli.md
+
+#SET PATHS
+PATH_WPA_CONF=/etc/wpa_supplicant/wpa_supplicant.conf
+
+#PARSE ARGUMENTS
+if [[ -n "$1" ]]
+then
+	NEW_SSID="$1"
+else
+	echo "WIFI setup: need at least an SSID as an argument"
+	exit 1
+fi
+NEW_WPA="$2"
+
+#CONFIGURE WIFI
+apt-get install wpasupplicant -y
+if [[ -n "$NEW_WPA" ]]
+then
+	wpa_passphrase $NEW_SSID $NEW_WPA >> $PATH_WPA_CONF
+	sed -i '/#psk/d' $PATH_WPA_CONF
+else
+	printf "network={\n\tssid=\"$NEW_SSID\"\n\tkey_mgmt=NONE\n}\n" >> $PATH_WPA_CONF
+fi
+
+#Add country code
+#https://www.raspberrypi.org/documentation/configuration/wireless/wireless-cli.md
+sed -i '/^country=/d' $PATH_WPA_CONF
+sed -i '/^update_config/a country=US' $PATH_WPA_CONF
+wpa_cli -i wlan0 reconfigure

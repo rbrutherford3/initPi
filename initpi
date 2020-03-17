@@ -17,6 +17,13 @@ PATH_INITPI_DIR=$(dirname "$PATH_INITPI")
 PATH_INITPI_BACKUPS=/etc/initpi
 PATH_INITPI_CONF=$PATH_INITPI_DIR/initpi.conf
 PATH_INITPI_FINISH=$PATH_INITPI_DIR/finish
+PATH_INITPI_WIFI=$PATH_INITPI_DIR/wifi
+PATH_INITPI_UPDATE=$PATH_INITPI_DIR/sysupdate
+PATH_INITPI_TIMEZONE=$PATH_INITPI_DIR/timezone
+PATH_INITPI_NEWUSER=$PATH_INITPI_DIR/newuser
+PATH_INITPI_NEWPASSWORD=$PATH_INITPI_DIR/newpassword
+PATH_INITPI_PUBKEY=$PATH_INITPI_DIR/pubkey
+PATH_INITPI_SSH=$PATH_INITPI_DIR/ssh
 
 #CONFIRM FILES
 if ! [[ -f "$PATH_INITPI_FINISH" ]]
@@ -282,99 +289,36 @@ cp $PATH_SUDO_PASSWORD_CONF $PATH_SUDO_PASSWORD_CONF_BACKUP
 cp $PATH_RCLOCAL $PATH_RCLOCAL_BACKUP
 cp $PATH_SSH_CONF $PATH_SSH_CONF_BACKUP
 
-#WIFI
-#https://www.raspberrypi.org/documentation/configuration/wireless/wireless-cli.md
-if [[ -n "$NEW_SSID" ]]
-then
-	apt-get install wpasupplicant -y
-	if [[ -n "$NEW_WPA" ]]
-	then
-		wpa_passphrase $NEW_SSID $NEW_WPA >> $PATH_WPA_CONF
-		sed -i '/#psk/d' $PATH_WPA_CONF
-	else
-		printf "network={\n\tssid=\"$NEW_SSID\"\n\tkey_mgmt=NONE\n}\n" >> $PATH_WPA_CONF
-	fi
-fi
-#Add country code
-#https://www.raspberrypi.org/documentation/configuration/wireless/wireless-cli.md
-sed -i '/^country=/d' $PATH_WPA_CONF
-sed -i '/^update_config/a country=US' $PATH_WPA_CONF
-wpa_cli -i wlan0 reconfigure
+#PERFORM CONFIGURATIONS
 
-#UPDATE SYSTEM
-#https://www.raspberrypi.org/documentation/raspbian/updating.md
-apt-get update -y
-apt-get full-upgrade -y
-apt-get autoremove --purge -y #not really necessary
-apt-get clean -y
-
-#SET TIME ZONE
-#https://www.google.com/amp/s/linoxide.com/linux-command/set-time-date-timezone-ubuntu-linux/amp/
-if [[ -n "$NEW_TIMEZONE" ]]
+if [[ -n $NEW_SSID ]]
 then
-	timedatectl set-timezone $NEW_TIMEZONE
+	$PATH_INITPI_WIFI $NEW_SSID $NEW_WPA
 fi
 
-#SET UP NEW USER
+$PATH_INITPI_UPDATE
+
+if [[ -n $NEW_TIMEZONE ]]
+then
+	$PATH_INITPI_TIMEZONE $NEW_TIMEZONE
+fi
+
 if [[ "$OLD_USER" != "$NEW_USER" ]]
 then
-	adduser --gecos "" --disabled-password $NEW_USER
-	sudo usermod -a -G adm,dialout,cdrom,sudo,audio,video,plugdev,games,users,input,netdev,gpio,i2c,spi $NEW_USER
-	cp -a $PATH_USER_BACKUP/* $PATH_NEW_USER_HOME
-
-	#sed -i "/^$OLD_USER /d" $PATH_SUDO_PASSWORD_CONF
-	echo "$NEW_USER ALL=(ALL) NOPASSWD: ALL" >> $PATH_SUDO_PASSWORD_CONF
-
+	$PATH_INITPI_NEWUSER $NEW_USER $PATH_USER_BACKUP
 	chage -E 0 $NEW_USER #lock user for later
 fi
 
-if [[ -n "$NEW_PASSWORD" ]]
-then
-	echo $NEW_USER:$NEW_PASSWORD | chpasswd
-fi
+$PATH_INITPI_NEWPASSWORD $NEW_USER $NEW_PASSWORD
 
 apt-get install openssh-server -y
-#ADD PUBLIC KEY FOR SSH
-#https://developers.redhat.com/blog/2018/11/02/how-to-manually-copy-ssh-keys-rhel/
+
 if [[ -n "$NEW_PUBKEY" ]]
 then
-        if [[ -f "$NEW_PUBKEY" ]]
-        then
-                NEW_PUBKEY2=$(cat "$NEW_PUBKEY")
-        elif curl --head --fail --silent --output /dev/null "$NEW_PUBKEY" 2> /dev/null
-        then
-                NEW_PUBKEY2=$(curl --silent "$NEW_PUBKEY")
-		if [[ "$NEW_PUBKEY2" =~ "searchassist.verizon.com" ]]
-       	        then
-                        NEW_PUBKEY2=$NEW_PUBKEY
-          	fi
-	else
-	        NEW_PUBKEY2=$NEW_PUBKEY
-	fi
-	NEW_PUBKEY=$NEW_PUBKEY2
-	mkdir $PATH_USER_SSH
-	chown $NEW_USER:$NEW_USER $PATH_USER_SSH
-	chmod 700 $PATH_USER_SSH
-	echo $NEW_PUBKEY > $PATH_USER_PUBKEYS
-	chown $NEW_USER:$NEW_USER $PATH_USER_PUBKEYS
-	chmod 600 $PATH_USER_PUBKEYS
+	$PATH_INITPI_PUBKEY $NEW_USER $NEW_PUBKEY
 fi
 
-#CONFIGURE SSH
-#https://github.com/openssh/openssh-portable/blob/master/sshd_config
-if [[ "$NEW_SSH_PORT" = 22 ]]
-then
-	sed -i "/^Port/c\#Port 22" $PATH_SSH_CONF
-else
-	sed -i "/^#*Port/c\Port $NEW_SSH_PORT" $PATH_SSH_CONF
-fi
-if [[ -n "$NEW_PUBKEY" ]]
-then
-	sed -i '/^#*PasswordAuthentication/c\PasswordAuthentication no' $PATH_SSH_CONF
-	sed -i '/^#*ChallengeResponseAuthentication/c\ChallengeResponseAuthentication no' $PATH_SSH_CONF
-	sed -i '/^#*UsePAM/c\UsePAM no' $PATH_SSH_CONF
-fi
-sed -i '/^#*PermitRootLogin/c\PermitRootLogin no' $PATH_SSH_CONF  #Do this regardless
+$PATH_INITPI_SSH $NEW_SSH_PORT $NEW_PUBKEY
 
 #INSTALL FIREWALL
 apt-get install ufw -y

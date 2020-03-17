@@ -1,0 +1,38 @@
+#!/bin/bash
+
+#CONFIGURE SSH PORT
+#https://github.com/openssh/openssh-portable/blob/master/sshd_config
+
+#PARSE INPUTS
+if [[ -n "$1" ]]
+then
+	NEW_SSH_PORT=$1
+else
+	echo "Configure SSH Port: Must pass at least a port number as an argument"
+	exit 1
+fi
+
+if [[ -n "$2" ]]
+then
+	NEW_PUBKEY=$2
+fi
+
+#SET PATHS
+PATH_SSH_CONF=/etc/ssh/sshd_config
+
+#CONFIGURE SSH
+if [[ "$NEW_SSH_PORT" = 22 ]]
+then
+	sed -i "/^Port/c\#Port 22" $PATH_SSH_CONF
+else
+	sed -i "/^#*Port/c\Port $NEW_SSH_PORT" $PATH_SSH_CONF
+fi
+
+if [[ -n "$NEW_PUBKEY" ]]
+then
+	sed -i '/^#*PasswordAuthentication/c\PasswordAuthentication no' $PATH_SSH_CONF
+	sed -i '/^#*ChallengeResponseAuthentication/c\ChallengeResponseAuthentication no' $PATH_SSH_CONF
+	sed -i '/^#*UsePAM/c\UsePAM no' $PATH_SSH_CONF
+fi
+
+sed -i '/^#*PermitRootLogin/c\PermitRootLogin no' $PATH_SSH_CONF  #Do this regardless
