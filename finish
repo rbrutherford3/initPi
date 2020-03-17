@@ -8,24 +8,10 @@ REVERT_TIMER=$4
 REVERT_TIMER=$((REVERT_TIMER*60))
 
 #PATHS
-PATH_INITPI_BACKUPS=/etc/initpi
-
-PATH_WPA_CONF=/etc/wpa_supplicant/wpa_supplicant.conf
-PATH_WPA_CONF_BACKUP=$PATH_INITPI_BACKUPS/wpa_supplicant.conf
-PATH_SUDO_PASSWORD_CONF=/etc/sudoers.d/010_pi-nopasswd
-PATH_SUDO_PASSWORD_CONF_BACKUP=$PATH_INITPI_BACKUPS/010_pi-nopasswd
-PATH_OLD_USER_HOME=/home/$OLD_USER #may be the same as PATH_USER_HOME if no new user is selected
-PATH_NEW_USER_HOME=/home/$NEW_USER
-PATH_USER_BACKUP=$PATH_INITPI_BACKUPS/user
-PATH_USER_SSH=$PATH_NEW_USER_HOME/.ssh
-PATH_USER_PUBKEYS=$PATH_USER_SSH/authorized_keys
-PATH_SSH_CONF=/etc/ssh/sshd_config
-PATH_SSH_CONF_BACKUP=$PATH_INITPI_BACKUPS/sshd_config
-PATH_FAIL2BAN=/etc/fail2ban
-PATH_FAIL2BAN_CONF=$PATH_FAIL2BAN/jail.conf
-PATH_FAIL2BAN_LOCAL=$PATH_FAIL2BAN/jail.local
-PATH_RCLOCAL=/etc/rc.local
-PATH_RCLOCAL_BACKUP=$PATH_INITPI_BACKUPS/rc.local
+PATH_INITPI=$(readlink -f "$0")
+PATH_INITPI_DIR=$(dirname "$PATH_INITPI")
+PATH_INITPI_PATHS=$PATH_INITPI_DIR/paths
+source $PATH_INITPI_PATHS
 
 #WAIT UNTIL rc.local FINISHES AND RESTORE IT TO IT'S ORIGINAL STATE
 while pidof -x rc.local > /dev/null
@@ -88,6 +74,7 @@ else
 	wpa_cli -i wlan0 reconfigure
 	cp $PATH_SUDO_PASSWORD_CONF_BACKUP $PATH_SUDO_PASSWORD_CONF
 	cp $PATH_SSH_CONF_BACKUP $PATH_SSH_CONF
+	systemctl stop ssh
 	systemctl disable ssh
 	rm $PATH_FAIL2BAN_LOCAL
 	ufw reset
