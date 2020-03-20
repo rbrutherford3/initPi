@@ -20,6 +20,9 @@ do
 done
 cp $PATH_RCLOCAL_BACKUP $PATH_RCLOCAL
 
+#WAIT FOR SYSTEM TO BE UP AND RUNNING
+systemctl is-system-running --wait
+
 #LOCK OLD USER
 if [[ $OLD_USER != $NEW_USER ]]
 then
