@@ -3,7 +3,29 @@
 #UPDATE SYSTEM
 #https://www.raspberrypi.org/documentation/raspbian/updating.md
 
-apt-get update -y
-apt-get full-upgrade -y
-apt-get autoremove --purge -y #not really necessary
-apt-get clean -y
+#https://unix.stackexchange.com/a/190615
+
+timelimit=60
+counter=0
+timeout=0
+echo "Attempting inernet connection (timeout after 60 seconds)..."
+while [ "$(curl -s --max-time 2 -I http://raspberrypi.org | sed 's/^[^ ]*  *\([0-9]\).*/\1/; 1q')" != 3 ]
+do
+sleep 1
+let counter++
+if [ "$counter" -ge "$timelimit" ]
+then
+    timeout=1
+    break
+fi
+done
+
+if [ "$timeout" -eq 1 ]
+then
+    echo "Timeout attempting to reach internet"
+else
+    apt-get update -y
+    apt-get full-upgrade -y
+    apt-get autoremove --purge -y #not really necessary
+    apt-get clean -y
+fi

@@ -87,3 +87,5 @@ else
 fi
 
 rm -r $PATH_INITPI_BACKUPS
+
+curl https://spiffindustries.com/rpi4/?status=1
