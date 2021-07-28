@@ -1,0 +1,26 @@
+#!/bin/bash
+
+#SET UP EXTERNAL HARD DRIVE
+
+ARG_MSG="Please provide arguments: volume label and backup directory (in that order)\n"
+
+if [[ -n "$1" ]]
+then
+	VOLUME_LABEL="$1"
+else
+	printf "$ARG_MSG"
+	exit 1
+fi
+
+MNT_DIR="/mnt/${VOLUME_LABEL}"
+
+if [[ -d "$MNT_DIR" ]]
+then
+	rm -r "$MNT_DIR"
+fi
+mkdir "$MNT_DIR"
+
+PATH_FSTAB="/etc/fstab"
+
+printf "LABEL=${VOLUME_LABEL}      ${MNT_DIR}      vfat    defaults                0       2\n" >> "$PATH_FSTAB"
+mount -L "$VOLUME_LABEL" "$MNT_DIR"

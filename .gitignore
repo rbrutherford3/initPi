@@ -3,4 +3,7 @@ retired/
 undo
 check
 preinit
-initpi.conf.test
+initpi.conf.*
+logs/
+public_keys
+LCD*

@@ -6,36 +6,38 @@
 #PARSE ARGUMENTS
 if [[ -n "$1" ]] && [[ -n "$2" ]]
 then
-	NEW_USER=$1
-	NEW_PUBKEY=$2
+	NEW_USER="$1"
+	NEW_PUBKEY="$2"
 else
-	echo "SSH Public key setup error: need both username and public key (or abs. path or URL) as arguments"
+	printf "SSH Public key setup error: need both username and public key (or abs. path or URL) as arguments\n"
 	exit 1
 fi
 
 #SET PATHS
-PATH_NEW_USER_HOME=/home/$NEW_USER
-PATH_USER_SSH=$PATH_NEW_USER_HOME/.ssh
-PATH_USER_PUBKEYS=$PATH_USER_SSH/authorized_keys
+PATH_NEW_USER_HOME="/home/${NEW_USER}"
+PATH_USER_SSH="${PATH_NEW_USER_HOME}/.ssh"
+PATH_USER_PUBKEYS="${PATH_USER_SSH}/authorized_keys"
 
 #ADD PUBLIC KEY
 if [[ -f "$NEW_PUBKEY" ]]
 then
-	NEW_PUBKEY2=$(cat "$NEW_PUBKEY")
+	NEW_PUBKEY2="$(cat ${NEW_PUBKEY})"
 elif curl --head --fail --silent --output /dev/null "$NEW_PUBKEY" 2> /dev/null
 then
-	NEW_PUBKEY2=$(curl --silent "$NEW_PUBKEY")
+	NEW_PUBKEY2="$(curl --silent ${NEW_PUBKEY})"
 	if [[ "$NEW_PUBKEY2" =~ "searchassist.verizon.com" ]]
         then
-		NEW_PUBKEY2=$NEW_PUBKEY
+		NEW_PUBKEY2="$NEW_PUBKEY"
 	fi
 else
-	NEW_PUBKEY2=$NEW_PUBKEY
+	NEW_PUBKEY2="$NEW_PUBKEY"
 fi
-NEW_PUBKEY=$NEW_PUBKEY2
-mkdir $PATH_USER_SSH
-chown $NEW_USER:$NEW_USER $PATH_USER_SSH
-chmod 700 $PATH_USER_SSH
-echo $NEW_PUBKEY > $PATH_USER_PUBKEYS
-chown $NEW_USER:$NEW_USER $PATH_USER_PUBKEYS
-chmod 600 $PATH_USER_PUBKEYS
+NEW_PUBKEY="$NEW_PUBKEY2"
+
+#SET UP FILESYSTEM FOR SSH
+mkdir "$PATH_USER_SSH"
+chown "$NEW_USER":"$NEW_USER" "$PATH_USER_SSH"
+chmod 700 "$PATH_USER_SSH"
+printf "$NEW_PUBKEY" > "$PATH_USER_PUBKEYS"
+chown "$NEW_USER":"$NEW_USER" "$PATH_USER_PUBKEYS"
+chmod 600 "$PATH_USER_PUBKEYS"

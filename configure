@@ -1,0 +1,96 @@
+#!/bin/bash
+
+#===CONFIGURE===
+
+#===SETTING UP VARIABLES AND PATHS===
+
+printf "Setting up paths and importing configuration settings\n"
+PATH_THIS_FILE="$(readlink -f ${0})"
+PATH_INITPI_DIR="$(dirname ${PATH_THIS_FILE})"
+source "${PATH_INITPI_DIR}/paths"
+if [[ -f "$PATH_INITPI_CONF" ]]
+then
+	source "$PATH_INITPI_CONF"
+else
+	read -p "Unable to locate configuration file\n"
+	exit 1
+fi
+
+#===BEGIN LOGGING===
+
+{
+
+printf "===BEGIN CONFIGURE===\n"
+
+#===SETTING UP USERS AND UPDATING===
+
+printf "IP address:"
+hostname -I
+
+printf "Force date and time sync to allow updating\n"
+systemctl stop systemd-timesyncd
+systemctl daemon-reload
+systemctl start systemd-timesyncd
+printf "Waiting for the time to synchronize\n"
+while [[ -z "$(timedatectl | grep 'System clock synchronized: yes' - )" ]]
+do
+	sleep 1
+done
+
+printf "Lock user to prevent logins during installation\n"
+if [[ "$OLD_USER" != "$NEW_USER" ]]
+then
+	chage -E 0 "$OLD_USER"
+fi
+
+printf "Fully update system (may take some time)\n"
+"$PATH_INITPI_UPDATE"
+
+printf "Set up new user (if it exists) and lock\n"
+if [[ "$OLD_USER" != "$NEW_USER" ]]
+then
+	"$PATH_INITPI_NEWUSER" "$NEW_USER" "$PATH_USER_BACKUP"
+	chage -E 0 "$NEW_USER" #lock user for later
+fi
+
+printf "Set up new password\n"
+"$PATH_INITPI_NEWPASSWORD" "$NEW_USER" "$NEW_PASSWORD"
+
+#===SETTING UP SSH===
+
+printf "Install SSH service if not already present\n"
+apt-get install openssh-server -y
+
+printf "Set up public key for SSH logins\n"
+if [[ -n "$NEW_PUBKEY" ]]
+then
+	"$PATH_INITPI_PUBKEY" "$NEW_USER" "$NEW_PUBKEY"
+fi
+
+printf "Configure SSH service\n"
+"$PATH_INITPI_SSH" "$NEW_SSH_PORT" "$NEW_PUBKEY"
+
+#===SETTNG UP FIREWALL AND FAIL2BAN===
+
+printf "Install firewall\n"
+apt-get install ufw -y
+
+printf "Install fail2ban to check for suspicious activity\n"
+apt-get install fail2ban -y
+
+#===FIXING ANY SYSTEM INSTALLATION PROBLEMS, FINISHING===
+
+printf "Fixing any dependency problems that might be present\n"
+"$PATH_INITPI_FIX"
+
+printf "Pointing initpi.service to next phase ('finish')\n"
+rm "$PATH_INITPI_NEXT"
+ln -s "$PATH_INITPI_FINISH" "$PATH_INITPI_NEXT"
+
+printf "===END CONFIGURE===\n\n"
+
+} |& tee -a "$PATH_INITPI_LOG"
+
+reboot
+
+exit 0

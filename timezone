@@ -1,6 +1,5 @@
 #!/bin/bash
 
-#SET TIME ZONE
 #https://www.google.com/amp/s/linoxide.com/linux-command/set-time-date-timezone-ubuntu-linux/amp/
 
 #PARSE ARGUMENTS
@@ -8,8 +7,9 @@ if [[ -n "$1" ]]
 then
 	NEW_TIMEZONE="$1"
 else
-	echo "Timezone setup: need timezone as argument"
+	printf "Timezone setup: need timezone as argument\n"
 	exit 1
 fi
 
-timedatectl set-timezone $NEW_TIMEZONE
+#SET TIMEZONE
+timedatectl set-timezone "$NEW_TIMEZONE"

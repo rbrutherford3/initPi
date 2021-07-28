@@ -1,56 +1,101 @@
 #!/bin/bash
+
 #https://www.raspberrypi.org/documentation/configuration/security.md
 
-#STOP SSH IF IT IS RUNNING (WON'T CAUSE EXIT OR TERMINATION OF CURRENT SESSION)
-systemctl stop ssh
+#===INITPI===
 
-#EXIT IF NOT RUN AS ROOT
-if [[ $(id -u) -ne 0 ]]
+#===SETTING UP VARIABLES AND PATHS===
+
+printf "Setting up paths and importing configuration settings\n"
+PATH_THIS_FILE="$(readlink -f ${0})"
+PATH_INITPI_DIR="$(dirname ${PATH_THIS_FILE})"
+source "${PATH_INITPI_DIR}/paths"
+if [[ -f "$PATH_INITPI_CONF" ]]
+then
+	source "$PATH_INITPI_CONF"
+else
+	read -p "Unable to locate configuration file\n"
+	exit 1
+fi
+
+#===SETTING UP BACKUP FILES===
+
+printf "Setting up backup folder for system files\n"
+if [[ -d "$PATH_INITPI_BACKUPS" ]]
+then
+	rm -r "$PATH_INITPI_BACKUPS"
+fi
+mkdir "$PATH_INITPI_BACKUPS"
+mkdir "$PATH_USER_BACKUP"
+
+#===INSTALLING EXTERNAL DRIVE AND SETTING UP LOG===
+
+cp -a "$PATH_FSTAB" "$PATH_INITPI_BACKUPS"
+printf "Setting up external media\n"
+if [[ "$EXT_STORAGE_LABEL" == "?" ]]
+then
+	read -p "Please enter label of external storage to be set up: " EXT_STORAGE_LABEL
+fi
+if [[ -n "$EXT_STORAGE_LABEL" ]]
+then
+	"$PATH_INITPI_EXT" "$EXT_STORAGE_LABEL"
+	PATH_EXT_DRIVE="/mnt/${EXT_STORAGE_LABEL}"
+	printf "PATH_EXT_DRIVE=${PATH_EXT_DRIVE}\n" >> "${PATH_INITPI_DIR}/paths"
+	PATH_INITPI_LOG="${PATH_EXT_DRIVE}/initpi.log"
+else
+	PATH_INITPI_LOG="${PATH_INITPI_BACKUPS}/initpi.log"
+fi
+if [[ -f "$PATH_INITPI_LOG" ]]
+then
+	rm "$PATH_INITPI_LOG"
+fi
+touch "$PATH_INITPI_LOG"
+printf "PATH_INITPI_LOG=${PATH_INITPI_LOG}\n" >> "${PATH_INITPI_DIR}/paths"
+
+#===BEGIN LOGGING===
+
+{
+
+printf "===BEGIN INITPI===\n"
+
+printf "Checking if run as root\n"
+if [[ "$(id -u)" -ne 0 ]]
 then
 	printf "Please run as root\n"
 	exit 1
 fi
 
-#INITPI PATHS
-PATH_INITPI=$(readlink -f "$0")
-PATH_INITPI_DIR=$(dirname "$PATH_INITPI")
-PATH_INITPI_PATHS=$PATH_INITPI_DIR/paths
-PATH_INITPI_CONF=$PATH_INITPI_DIR/initpi.conf
-PATH_INITPI_FINISH=$PATH_INITPI_DIR/finish
-PATH_INITPI_WIFI=$PATH_INITPI_DIR/wifi
-PATH_INITPI_UPDATE=$PATH_INITPI_DIR/sysupdate
-PATH_INITPI_TIMEZONE=$PATH_INITPI_DIR/timezone
-PATH_INITPI_NEWUSER=$PATH_INITPI_DIR/newuser
-PATH_INITPI_NEWPASSWORD=$PATH_INITPI_DIR/newpassword
-PATH_INITPI_PUBKEY=$PATH_INITPI_DIR/pubkey
-PATH_INITPI_SSH=$PATH_INITPI_DIR/ssh
+#===PREPARING===
 
-#CONFIRM FILES
-if ! [[ -f "$PATH_INITPI_FINISH" ]]
+printf "Confirming that required files exist\n"
+if ! [[ -f "$PATH_INITPI_CONFIGURE" && -f "$PATH_INITPI_FINISH" ]]
 then
 	printf "Please download all program files and place them in the same directory\n"
 	exit 1
 fi
 
-#SET ALL OPTIONS TO ? (MANUAL ENTRY)
+printf "Stop and disable SSH to prevent premature logins\n"
+systemctl stop ssh
+systemctl disable ssh
+
+#Function to force user entry on all configuration settings
 askall () {
-	NEW_TIMEZONE=?
-	NEW_SSID=?
-	NEW_WPA=?
-	OLD_USER=?
-	NEW_USER=?
-        NEW_PASSWORD=?
-	NEW_PUBKEY=?
-	NEW_SSH_PORT=?
-	REVERT_TIMER=?
+	NEW_TIMEZONE="?"
+	NEW_SSID="?"
+	NEW_WPA="?"
+	OLD_USER="?"
+	NEW_USER="?"
+	NEW_PASSWORD="?"
+	NEW_PUBKEY="?"
+	NEW_SSH_PORT="?"
+	REVERT_TIMER="?"
 }
 
-#IMPORT CONFIGURATION FILE
+printf "Checking configuration file for completeness\n"
 if [[ -f "$PATH_INITPI_CONF" ]]
 then
-	source $PATH_INITPI_CONF
 	printf "Warning: configuration file will be deleted after run\n"
-	if [[ -z "$NEW_TIMEZONE" && -z "$NEW_SSID" && -z "$NEW_WPA" && \
+	if [[ -z "$NEW_TIMEZONE" && -z "${NEW_SSID}" && -z "$NEW_WPA" && \
 		-z "$OLD_USER" && -z "$NEW_USER" && -z "$NEW_PASSWORD" && \
 		-z "$NEW_PUBKEY" && -z "$NEW_SSH_PORT" && -z "$REVERT_TIMER" ]]
 	then
@@ -62,17 +107,21 @@ else
 	askall
 fi
 
-#GLOBALS
-DEFAULT_USER=pi
-IS_NUMBER='^[0-9]+$'
-PATH_TZ=/usr/share/zoneinfo/posix
-NETWORK_SCAN=$PATH_INITPI_DIR/networkscan
-NETWORK_SCAN_LIST=$PATH_INITPI_DIR/networkscanlist
+printf "Discard imported configuration file and create a new one (in case of changes)\n"
+if [[ -f "$PATH_INITPI_CONF" ]]
+then
+	rm "$PATH_INITPI_CONF"
+fi
+touch "$PATH_INITPI_CONF"
+printf "#!/bin/bash\n" >> "$PATH_INITPI_CONF"
+chmod u+x "$PATH_INITPI_CONF"
 
-#USER INTERFACE
+#===TIMEZONE===
+
 printf "Enter setup options, leave blank to skip that setup\n"
 
-if [[ "$NEW_TIMEZONE" = "?" ]]
+printf "Recording timezone\n"
+if [[ "$NEW_TIMEZONE" == "?" ]]
 then
 	until
 		read -p "Enter timezone (ex: America/New_York): " NEW_TIMEZONE
@@ -83,42 +132,48 @@ then
 fi
 if [[ -n "$NEW_TIMEZONE" ]]
 then
-	printf "Timezone will be set up as '$NEW_TIMEZONE'\n"
+	printf "Timezone will be set up as \"${NEW_TIMEZONE}\"\n"
+	printf "NEW_TIMEZONE=\"${NEW_TIMEZONE}\"\n" >> "$PATH_INITPI_CONF"
 else
 	printf "No timezone will be set up\n"
 fi
 
-if [[ "$NEW_SSID" = "?" ]]
+#===WIFI===
+
+printf "Recording WiFi network name and WPA key\n"
+cp -a "$PATH_WPA_CONF" "$PATH_WPA_CONF_BACKUP"
+if [[ "$NEW_SSID" == "?" ]]
 then
-	printf "Available WiFi networks (wait up to 10 seconds for scan):\n"
+	printf "Visible WiFi networks in range (wait up to 10 seconds for scan):\n"
 	ifconfig wlan0 up
-	maxcount=$((SECONDS+10))
+	maxcount="$((SECONDS+10))"
 	until iwlist wlan0 scan > "$NETWORK_SCAN" 2>/dev/null || ((SECONDS>maxcount))
 	do
 	        sleep 1
 	done
 	if [[ -f "$NETWORK_SCAN" ]]
 	then
-		sed -n -e 's/^.*ESSID://p' $NETWORK_SCAN | sed 's/"//g' > $NETWORK_SCAN_LIST
-		rm $NETWORK_SCAN
-		numnetworks=$(wc -l < $NETWORK_SCAN_LIST)
-		grep -n '^' $NETWORK_SCAN_LIST
+		sed -n -e 's/^.*ESSID://p' "$NETWORK_SCAN" | sed 's/"//g' > "$NETWORK_SCAN_LIST"
+		rm "$NETWORK_SCAN"
+		numnetworks="$(wc -l < "${NETWORK_SCAN_LIST}")"
+		grep -n '^' "$NETWORK_SCAN_LIST"
 		msg="Enter a list number or a WiFi SSID: "
 	else
-		printf "Newtork scan timed out\n"
+		printf "Network scan timed out\n"
 		msg="Enter WiFi SSID: "
 	fi
 	read -p "$msg" NEW_SSID
-	if [[ "$NEW_SSID" =~ $IS_NUMBER && "$NEW_SSID" -le "$numnetworks" && "$NEW_SSID" -gt 0 ]]
+	if [[ "${NEW_SSID}" =~ "$IS_NUMBER" && "${NEW_SSID}" -le "$numnetworks" && "${NEW_SSID}" -gt 0 ]]
 	then
-		NEW_SSID=$(sed -n ${NEW_SSID}p $NETWORK_SCAN_LIST)
+		NEW_SSID="$(sed -n ${NEW_SSID}p ${NETWORK_SCAN_LIST})"
 	fi
-	rm $NETWORK_SCAN_LIST
+	rm "$NETWORK_SCAN_LIST"
 fi
-if [[ -n "$NEW_SSID" ]]
+if [[ -n "${NEW_SSID}" ]]
 then
-	printf "WiFi network '$NEW_SSID' will be set up\n"
-	if [[ "$NEW_WPA" = "?" ]]
+	printf "WiFi network \"${NEW_SSID}\" will be set up\n"
+	printf "NEW_SSID=\"${NEW_SSID}\"\n" >> "$PATH_INITPI_CONF"
+	if [[ "$NEW_WPA" == "?" ]]
 	then
 		while
 			read -s -p "Enter WiFi key: " NEW_WPA
@@ -129,54 +184,68 @@ then
 		do
 			printf "Mismatch, try again\n"
 		done
-		if [[ -n "$NEW_WPA" ]]
-		then
-			printf "WiFi password saved\n"
-		else
-			printf "No WiFi password will be set up, assuming open network\n"
-		fi
+	fi
+	if [[ -n "$NEW_WPA" ]]
+	then
+		printf "WiFi password saved\n"
+		printf "NEW_WPA=\"${NEW_WPA}\"\n" >> "$PATH_INITPI_CONF"
+	else
+		printf "No WiFi password will be set up, assuming open network\n"
 	fi
 else
 	printf "No WiFi will be set up\n"
 fi
+printf "Note: no need to save WiFi information externally: it is set up here in this file\n"
 
-if [[ "$OLD_USER" = "?" ]]
+#===OLD (CURRENT) USERNAME====
+
+printf "Recording \"old\" (current) user\n"
+if [[ "$OLD_USER" == "?" ]]
 then
 	until
-		read -p "Enter current username (default=$DEFAULT_USER): " OLD_USER
-		[[ -n $(getent passwd | grep "^$OLD_USER:") ]] || [[ -z "$OLDUSER" && -n $(getent passwd | grep "^$DEFAULT_USER:") ]]
+		read -p "Enter current username (default=\"${DEFAULT_USER}\"): " OLD_USER
+		[[ -n "$(getent passwd | grep ^${OLD_USER}:)" ]] || [[ -z "$OLDUSER" && -n "$(getent passwd | grep ^${DEFAULT_USER}:)" ]]
 	do
 		printf "Invalid user, try again\n"
 	done
 fi
 if [[ -n "$OLD_USER" ]]
 then
-	printf "User $OLD_USER selected\n"
+	printf "User \"${OLD_USER}\" selected\n"
 else
-	if [[ -n $(getent passwd | grep "^$DEFAULT_USER:") ]]
+	if [[ -n "$(getent passwd | grep ^${DEFAULT_USER}:)" ]]
 	then
-		OLD_USER=$DEFAULT_USER
+		OLD_USER="$DEFAULT_USER"
 	else
-		printf "No user specified and no $DEFAULT_USER user exists!\n"
+		printf "No user specified and \"${DEFAULT_USER}\" user does not exist!\n"
 		exit 1
 	fi
 fi
+cp -a "/home/${OLD_USER}/*" "$PATH_USER_BACKUP"
+printf "OLD_USER=\"${OLD_USER}\"\n" >> "$PATH_INITPI_CONF"
 
-if [[ "$NEW_USER" = "?" ]]
+#===NEW USERNAME===
+
+printf "Recording new user\n"
+if [[ "$NEW_USER" == "?" ]]
 then
-	read -p "Enter username to replace $OLD_USER: " NEW_USER
+	read -p "Enter username to replace \"${OLD_USER}\": " NEW_USER
 fi
 if [[ -n "$NEW_USER" ]]
 then
-	printf "User $NEW_USER will be created\n"
+	printf "User \"${NEW_USER}\" will be created\n"
 else
-	NEW_USER=$OLD_USER
-	printf "No new user will be set up, user $OLD_USER will remain\n"
+	NEW_USER="$OLD_USER"
+	printf "No new user will be set up, user \"${OLD_USER}\" will remain\n"
 fi
+printf "NEW_USER=\"${NEW_USER}\"\n" >> "$PATH_INITPI_CONF"
 
-if [[ "$NEW_PASSWORD" = "?" ]]
+#===USER PASSWORD===
+
+printf "Recording password for Raspbian user\n"
+if [[ "$NEW_PASSWORD" == "?" ]]
 then
-	printf "Change password for user $NEW_USER\n"
+	printf "Change password for user ${NEW_USER}\n"
 	while
 		read -s -p "New password: " NEW_PASSWORD
 		printf "\n"
@@ -190,51 +259,64 @@ fi
 if [[ -n "$NEW_PASSWORD" ]]
 then
 	printf "Password saved\n"
+	printf "NEW_PASSWORD=\"${NEW_PASSWORD}\"\n" >> "$PATH_INITPI_CONF"
 else
 	if [[ "$OLD_USER" = "$NEW_USER" ]]
 	then
-		printf "$OLD_USER still has default password, be sure to use SSH keys\n"
+		printf "\"${OLD_USER}\" still has default password, be sure to use SSH keys\n"
 	else
-		printf "New user $NEW_USER will have a disabled password, be sure to use SSH keys\n"
+		printf "New user \"${NEW_USER}\" will have a disabled password, be sure to use SSH keys\n"
 	fi
 fi
 
-if [[ "$NEW_PUBKEY" = "?" ]]
+#===SSH PUBLIC KEY===
+
+printf "Recording public key for SSH logins\n"
+if [[ "$NEW_PUBKEY" == "?" ]]
 then
 	read -p "Enter SSH public key (or abs path or URL): " NEW_PUBKEY
 fi
 if [[ -n "$NEW_PUBKEY" ]]
 then
 	printf "Public key saved\n"
+	printf "NEW_PUBKEY=\"${NEW_PUBKEY}\"\n" >> "$PATH_INITPI_CONF"
 else
 	printf "No public key will be setup\n"
 fi
 
-if [[ "$NEW_SSH_PORT" = "?" ]]
+#===NEW SSH PORT NUMBER===
+
+printf "Recording new SSH port\n"
+cp -a "$PATH_SSH_CONF" "$PATH_SSH_CONF_BACKUP"
+if [[ "$NEW_SSH_PORT" == "?" ]]
 then
 	until
 		read -p "Enter new SSH port number: " NEW_SSH_PORT
-		[[ "$NEW_SSH_PORT" =~ $IS_NUMBER || -z "$IS_NUMBER" ]]
+		[[ "$NEW_SSH_PORT" =~ "$IS_NUMBER" || -z "$IS_NUMBER" ]]
 	do
 		printf "Invalid entry, please try again\n"
 	done
 fi
 if [[ -n "$NEW_SSH_PORT" ]]
 then
-	printf "SSH port will be changed to $NEW_SSH_PORT\n"
+	printf "SSH port will be changed to ${NEW_SSH_PORT}\n"
 else
 	printf "No SSH port provided, default 22 will be used\n"
 	NEW_SSH_PORT=22
 fi
+printf "NEW_SSH_PORT=${NEW_SSH_PORT}\n" >> "$PATH_INITPI_CONF"
 
-if [[ "$REVERT_TIMER" = "?" ]]
+#===LENGTH OF REVERT TIMER===
+
+printf "Recording length (if any) of revert timer (in case user becomes locked out)\n"
+if [[ "$REVERT_TIMER" == "?" ]]
 then
 	printf "System will wait for a matter of time for a login to occur\n"
 	printf "before reverting back to default user, and SSH settings.\n"
 	printf "Enter 0 to skip this, default is 60\n"
 	until
 		read -p "Enter reversion wait time: " REVERT_TIMER
-		[[ "$REVERT_TIMER" =~ $IS_NUMBER && "$REVERT_TIMER" -ge 0 ]] || [[ -z "$REVERT_TIMER" ]]
+		[[ "$REVERT_TIMER" =~ "$IS_NUMBER" && "$REVERT_TIMER" -ge 0 ]] || [[ -z "$REVERT_TIMER" ]]
 	do
 		printf "Invalid entry, try again\n"
 	done
@@ -245,83 +327,66 @@ then
 	then
 		printf "Timer will be skipped\n"
 	else
-		printf "Timer will be $REVERT_TIMER minutes\n"
+		printf "Timer will be ${REVERT_TIMER} minutes\n"
 	fi
 else
 	printf "Timer will be set to default (60 minutes)\n"
 	REVERT_TIMER=60
 fi
+printf "REVERT_TIMER=${REVERT_TIMER}\n" >> "$PATH_INITPI_CONF"
 
-#VALIDATE INPUTS:
+#===LOOK FOR PROBLEMS IN COLLECTIVE VALUES
+
+printf "Check for a situation where remote login is impossible\n"
 if [[ -z "$NEW_PASSWORD" && -z "$NEW_PUBKEY" ]]
 then
 	printf "Must either supply a password or public key, please try again\n"
 	exit 1
 fi
 
-#SET PATHS
-source $PATH_INITPI_PATHS
+#===INSTALLING SYSTEMD SERVICE FOR NEXT PHASE OF SETUP===
 
-#CREATE BACKUPS
-if [[ -d $PATH_INITPI_BACKUPS ]]
+printf "Installing systemd service for initpi...\n"
+
+printf "Creating systemd service file for running initpi scripts after reboots\n"
+printf "[Unit]\n" > "$PATH_INITPI_SERVICE"
+printf "Description=initpi setup service\n" >> "$PATH_INITPI_SERVICE"
+printf "After=multi-user.target\n" >> "$PATH_INITPI_SERVICE"
+printf "Before=getty@tty1.service\n" >> "$PATH_INITPI_SERVICE"
+printf "\n[Service]\n" >> "$PATH_INITPI_SERVICE"
+printf "Type=oneshot\n" >> "$PATH_INITPI_SERVICE"
+printf "StandardOutput=journal+console\n" >> "$PATH_INITPI_SERVICE"
+printf "StandardError=inherit\n" >> "$PATH_INITPI_SERVICE"
+printf "ExecStart=\"${PATH_INITPI_NEXT}\"\n" >> "$PATH_INITPI_SERVICE"
+printf "\n[Install]\n" >> "$PATH_INITPI_SERVICE"
+printf "WantedBy=multi-user.target\n" >> "$PATH_INITPI_SERVICE"
+chmod u+x "$PATH_INITPI_SERVICE"
+
+printf "Pointing initpi.service to next phase ('configure')\n"
+rm -f "$PATH_INITPI_NEXT"
+ln -s "$PATH_INITPI_CONFIGURE" "$PATH_INITPI_NEXT"
+
+printf "Installing service\n"
+systemctl daemon-reload
+systemctl enable initpi.service
+
+# Wifi and timezone need to be set up here because wifi requires a reboot to work
+printf "Setting up Wifi\n"
+if [[ -n "$NEW_SSID" ]]
 then
-	rm -r $PATH_INITPI_BACKUPS
-fi
-mkdir $PATH_INITPI_BACKUPS
-cp -a $PATH_OLD_USER_HOME $PATH_USER_BACKUP
-cp $PATH_WPA_CONF $PATH_WPA_CONF_BACKUP
-cp $PATH_SUDO_PASSWORD_CONF $PATH_SUDO_PASSWORD_CONF_BACKUP
-cp $PATH_RCLOCAL $PATH_RCLOCAL_BACKUP
-cp $PATH_SSH_CONF $PATH_SSH_CONF_BACKUP
-
-#PERFORM CONFIGURATIONS
-
-if [[ -n $NEW_SSID ]]
-then
-	$PATH_INITPI_WIFI $NEW_SSID $NEW_WPA
-fi
-
-$PATH_INITPI_UPDATE
-
-if [[ -n $NEW_TIMEZONE ]]
-then
-	$PATH_INITPI_TIMEZONE $NEW_TIMEZONE
-fi
-
-if [[ "$OLD_USER" != "$NEW_USER" ]]
-then
-	$PATH_INITPI_NEWUSER $NEW_USER $PATH_USER_BACKUP
-	chage -E 0 $NEW_USER #lock user for later
+	"$PATH_INITPI_WIFI" "$NEW_SSID" "$NEW_WPA"
 fi
 
-$PATH_INITPI_NEWPASSWORD $NEW_USER $NEW_PASSWORD
-
-apt-get install openssh-server -y
-
-if [[ -n "$NEW_PUBKEY" ]]
+printf "Setting up timezone\n"
+if [[ -n "$NEW_TIMEZONE" ]]
 then
-	$PATH_INITPI_PUBKEY $NEW_USER $NEW_PUBKEY
+	"$PATH_INITPI_TIMEZONE" "$NEW_TIMEZONE"
 fi
 
-$PATH_INITPI_SSH $NEW_SSH_PORT $NEW_PUBKEY
+printf "===END INITPI===\n\n"
 
-#INSTALL FIREWALL
-apt-get install ufw -y
-
-#INSTALL FAIL2BAN
-apt-get install fail2ban -y
-
-#DELETE CONFIGURATION FILE IF EXISTS
-if [[ -f "$PATH_INITPI_CONF" ]]
-then
-	rm $PATH_INITPI_CONF
-fi
-
-#PREPARE FOR RESTART (SET UP rc.local)
-sed -i "/^exit 0/d" $PATH_RCLOCAL
-printf "### BEGIN INITPI ###\n" >> $PATH_RCLOCAL
-printf "$PATH_INITPI_FINISH $OLD_USER $NEW_USER $NEW_SSH_PORT $REVERT_TIMER &\n" >> $PATH_RCLOCAL
-printf "### END INITPI ###\n" >> $PATH_RCLOCAL
-printf "exit 0\n" >> $PATH_RCLOCAL
+} |& tee -a "$PATH_INITPI_LOG"
 
 reboot
+
+exit 0

@@ -5,24 +5,24 @@
 #PARSE ARGUMENTS
 if [[ -n "$1" ]]
 then
-	NEW_USER=$1
+	NEW_USER="$1"
 else
-	echo "New user setup: need at least the username as an argument"
+	printf "New user setup: need at least the username as an argument\n"
 	exit 1
 fi
-PATH_USER_BACKUP=$2
+PATH_USER_BACKUP="$2"
 
 #SET PATHS
-PATH_NEW_USER_HOME=/home/$NEW_USER
-PATH_SUDO_PASSWORD_CONF=/etc/sudoers.d/010_pi-nopasswd
+PATH_NEW_USER_HOME="/home/${NEW_USER}"
+PATH_SUDO_PASSWORD_CONF="/etc/sudoers.d/010_pi-nopasswd"
 
 #CREATE NEW USER
-adduser --gecos "" --disabled-password $NEW_USER
-usermod -a -G adm,dialout,cdrom,sudo,audio,video,plugdev,games,users,input,netdev,gpio,i2c,spi $NEW_USER
+adduser --gecos "" --disabled-password "$NEW_USER"
+usermod -a -G adm,dialout,cdrom,sudo,audio,video,plugdev,games,users,input,netdev,gpio,i2c,spi "$NEW_USER"
 
 if [[ -n "$PATH_USER_BACKUP" ]]
 then
-	cp -a $PATH_USER_BACKUP/* $PATH_NEW_USER_HOME
+	cp -a "$PATH_USER_BACKUP"/* "$PATH_NEW_USER_HOME"
 fi
 
-echo "$NEW_USER ALL=(ALL) NOPASSWD: ALL" >> $PATH_SUDO_PASSWORD_CONF
+printf "${NEW_USER} ALL=(ALL) NOPASSWD: ALL\n" >> "$PATH_SUDO_PASSWORD_CONF"
